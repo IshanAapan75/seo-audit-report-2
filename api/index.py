@@ -342,9 +342,9 @@ def seo_audit():
         }), 500
 
 # Vercel requires the app to be available at module level
-def handler(request):
-    """Vercel handler function"""
-    return app(request.environ, lambda *args: None)
+# def handler(request):
+#     """Vercel handler function"""
+#     return app(request.environ, lambda *args: None)
 
 if __name__ == "__main__":
     app.run(debug=True)
