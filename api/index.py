@@ -1,395 +1,236 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
-import requests
-from bs4 import BeautifulSoup
-import re
-from urllib.parse import urljoin, urlparse
+import os
+import tempfile
+import shutil
 from datetime import datetime
-import base64
-from io import BytesIO
 import traceback
+import sys
+import re
+
+# Add the parent directory to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from seo_audit_extd import main as run_seo_audit
+except ImportError:
+    # Fallback for Vercel deployment
+    def run_seo_audit(customer_name, url):
+        raise ImportError("SEO audit module not available in serverless environment")
 
 app = Flask(__name__)
 CORS(app)
 
-class SimpleSeOAuditor:
-    """Simple SEO auditor that works in serverless environments"""
-    
-    def __init__(self, url, customer_name):
-        self.url = url
-        self.customer_name = customer_name
-        self.domain = urlparse(url).netloc
-        self.issues = []
-        self.results = {}
-        
-    def fetch_page(self):
-        """Fetch the main page content"""
-        try:
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            response = requests.get(self.url, headers=headers, timeout=10)
-            response.raise_for_status()
-            return BeautifulSoup(response.content, 'html.parser')
-        except Exception as e:
-            self.issues.append(f"Failed to fetch page: {str(e)}")
-            return None
-    
-    def check_title_tag(self, soup):
-        """Check title tag optimization"""
-        title = soup.find('title')
-        if not title:
-            self.issues.append("Missing title tag")
-            return "Missing"
-        
-        title_text = title.get_text().strip()
-        title_length = len(title_text)
-        
-        if title_length == 0:
-            self.issues.append("Empty title tag")
-            return "Empty"
-        elif title_length < 30:
-            self.issues.append(f"Title too short ({title_length} chars) - should be 30-60 chars")
-        elif title_length > 60:
-            self.issues.append(f"Title too long ({title_length} chars) - should be 30-60 chars")
-        
-        return title_text[:100] + "..." if len(title_text) > 100 else title_text
-    
-    def check_meta_description(self, soup):
-        """Check meta description optimization"""
-        meta_desc = soup.find('meta', attrs={'name': 'description'})
-        if not meta_desc:
-            self.issues.append("Missing meta description")
-            return "Missing"
-        
-        desc_content = meta_desc.get('content', '').strip()
-        desc_length = len(desc_content)
-        
-        if desc_length == 0:
-            self.issues.append("Empty meta description")
-            return "Empty"
-        elif desc_length < 120:
-            self.issues.append(f"Meta description too short ({desc_length} chars) - should be 120-160 chars")
-        elif desc_length > 160:
-            self.issues.append(f"Meta description too long ({desc_length} chars) - should be 120-160 chars")
-        
-        return desc_content[:200] + "..." if len(desc_content) > 200 else desc_content
-    
-    def check_headings(self, soup):
-        """Check heading structure"""
-        headings = {}
-        heading_issues = []
-        
-        for i in range(1, 7):
-            h_tags = soup.find_all(f'h{i}')
-            headings[f'H{i}'] = len(h_tags)
-            
-            if i == 1 and len(h_tags) == 0:
-                heading_issues.append("Missing H1 tag")
-            elif i == 1 and len(h_tags) > 1:
-                heading_issues.append(f"Multiple H1 tags found ({len(h_tags)})")
-        
-        if heading_issues:
-            self.issues.extend(heading_issues)
-        
-        return headings
-    
-    def check_images(self, soup):
-        """Check image optimization"""
-        images = soup.find_all('img')
-        total_images = len(images)
-        missing_alt = 0
-        empty_alt = 0
-        
-        for img in images:
-            alt = img.get('alt')
-            if not alt:
-                missing_alt += 1
-            elif not alt.strip():
-                empty_alt += 1
-        
-        if missing_alt > 0:
-            self.issues.append(f"{missing_alt} images missing alt attributes")
-        if empty_alt > 0:
-            self.issues.append(f"{empty_alt} images have empty alt attributes")
-        
-        return {
-            'total': total_images,
-            'missing_alt': missing_alt,
-            'empty_alt': empty_alt
-        }
-    
-    def check_internal_links(self, soup):
-        """Check internal linking"""
-        links = soup.find_all('a', href=True)
-        internal_links = 0
-        external_links = 0
-        
-        for link in links:
-            href = link['href']
-            if href.startswith('http'):
-                if self.domain in href:
-                    internal_links += 1
-                else:
-                    external_links += 1
-            elif href.startswith('/') or not href.startswith('#'):
-                internal_links += 1
-        
-        return {
-            'internal': internal_links,
-            'external': external_links,
-            'total': len(links)
-        }
-    
-    def check_page_speed_factors(self, soup):
-        """Check basic page speed factors"""
-        factors = {
-            'inline_css': len(soup.find_all('style')),
-            'external_css': len(soup.find_all('link', rel='stylesheet')),
-            'inline_js': len(soup.find_all('script', string=True)),
-            'external_js': len(soup.find_all('script', src=True))
-        }
-        
-        if factors['inline_css'] > 3:
-            self.issues.append(f"Too much inline CSS ({factors['inline_css']} style tags)")
-        if factors['external_css'] > 5:
-            self.issues.append(f"Too many CSS files ({factors['external_css']} files)")
-        if factors['external_js'] > 10:
-            self.issues.append(f"Too many JavaScript files ({factors['external_js']} files)")
-        
-        return factors
-    
-    def generate_recommendations(self):
-        """Generate SEO recommendations"""
-        recommendations = []
-        
-        if "Missing title tag" in str(self.issues):
-            recommendations.append("Add a descriptive title tag (30-60 characters)")
-        if "Missing meta description" in str(self.issues):
-            recommendations.append("Add a compelling meta description (120-160 characters)")
-        if "Missing H1 tag" in str(self.issues):
-            recommendations.append("Add an H1 tag to clearly define the page topic")
-        if "images missing alt attributes" in str(self.issues):
-            recommendations.append("Add descriptive alt text to all images for accessibility")
-        if "Too many" in str(self.issues):
-            recommendations.append("Optimize page loading by reducing the number of external resources")
-        
-        # General recommendations
-        recommendations.extend([
-            "Ensure your content is original and provides value to users",
-            "Build quality backlinks from relevant websites",
-            "Improve page loading speed for better user experience",
-            "Make sure your site is mobile-friendly and responsive",
-            "Create an XML sitemap and submit it to search engines"
-        ])
-        
-        return recommendations
-    
-    def run_audit(self):
-        """Run the complete SEO audit"""
-        print(f"Starting audit for: {self.url}")
-        
-        soup = self.fetch_page()
-        if not soup:
-            print("Failed to fetch page")
-            return None
-        
-        print("Page fetched successfully, analyzing...")
-        
-        try:
-            self.results = {
-                'title': self.check_title_tag(soup),
-                'meta_description': self.check_meta_description(soup),
-                'headings': self.check_headings(soup),
-                'images': self.check_images(soup),
-                'links': self.check_internal_links(soup),
-                'page_speed': self.check_page_speed_factors(soup),
-                'issues': self.issues,
-                'recommendations': self.generate_recommendations()
-            }
-            
-            print(f"Audit completed. Found {len(self.issues)} issues")
-            return self.results
-            
-        except Exception as e:
-            print(f"Error during audit: {str(e)}")
-            return None
-
-def generate_html_report(customer_name, url, audit_results):
-    """Generate a beautiful HTML report"""
-    
-    if not audit_results:
-        return f"""<!DOCTYPE html>
-<html>
-<head>
-    <title>SEO Audit Report - {customer_name}</title>
-    <meta charset="utf-8">
-    <style>
-        body {{ font-family: 'Segoe UI', sans-serif; margin: 20px; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); }}
-        .error {{ background: #fef2f2; border: 1px solid #e74c3c; padding: 20px; border-radius: 8px; text-align: center; }}
-    </style>
-</head>
-<body>
-    <div class="error">
-        <h1>❌ Audit Failed</h1>
-        <p>Could not analyze the website: {url}</p>
-        <p>Please check if the website is accessible and try again.</p>
-    </div>
-</body>
-</html>"""
-    
-    # Safely get values with defaults
-    issues = audit_results.get('issues', [])
-    recommendations = audit_results.get('recommendations', [])
-    headings = audit_results.get('headings', {})
-    images = audit_results.get('images', {})
-    links = audit_results.get('links', {})
-    
-    # Calculate score
-    issues_count = len(issues)
-    score = max(0, 100 - (issues_count * 15))
-    
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>SEO Audit Report - {customer_name}</title>
-        <meta charset="utf-8">
-        <style>
-            body {{ 
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-                margin: 0; 
-                padding: 20px; 
-                background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); 
-                color: #333; 
-                line-height: 1.6; 
-            }}
-            .container {{ max-width: 1000px; margin: 0 auto; }}
-            h1 {{ 
-                color: white; 
-                font-size: 2.2em; 
-                text-align: center; 
-                margin-bottom: 20px; 
-                padding: 25px 0; 
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                border-radius: 10px; 
-                box-shadow: 0 4px 8px rgba(0,0,0,0.1); 
-            }}
-            h2 {{ 
-                color: white; 
-                font-size: 1.5em; 
-                margin-top: 30px; 
-                margin-bottom: 15px; 
-                padding: 15px 20px; 
-                background: linear-gradient(90deg, #3498db, #2980b9); 
-                border-radius: 8px; 
-                box-shadow: 0 3px 6px rgba(0,0,0,0.1); 
-            }}
-            .score {{ 
-                text-align: center; 
-                font-size: 3em; 
-                font-weight: bold; 
-                margin: 20px 0; 
-                padding: 30px; 
-                background: white; 
-                border-radius: 15px; 
-                box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-                color: {'#27ae60' if score >= 80 else '#f39c12' if score >= 60 else '#e74c3c'};
-            }}
-            .section {{ 
-                background: white; 
-                margin: 20px 0; 
-                padding: 20px; 
-                border-radius: 10px; 
-                box-shadow: 0 4px 8px rgba(0,0,0,0.1); 
-            }}
-            .issue {{ 
-                background: #fdf2f2; 
-                border: 1px solid #e74c3c; 
-                padding: 10px 15px; 
-                margin: 5px 0; 
-                border-radius: 5px; 
-                border-left: 4px solid #e74c3c; 
-            }}
-            .recommendation {{ 
-                background: #f0f9ff; 
-                border: 1px solid #3498db; 
-                padding: 10px 15px; 
-                margin: 5px 0; 
-                border-radius: 5px; 
-                border-left: 4px solid #3498db; 
-            }}
-            table {{ 
-                width: 100%; 
-                border-collapse: collapse; 
-                margin: 15px 0; 
-            }}
-            th, td {{ 
-                padding: 12px; 
-                text-align: left; 
-                border-bottom: 1px solid #ddd; 
-            }}
-            th {{ 
-                background: #34495e; 
-                color: white; 
-            }}
-            tr:nth-child(even) {{ background: #f8f9fa; }}
-            .timestamp {{ 
-                text-align: center; 
-                color: #7f8c8d; 
-                font-style: italic; 
-                margin: 30px 0; 
-                padding: 15px; 
-                background: white; 
-                border-radius: 8px; 
-                border: 2px dashed #bdc3c7; 
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🔍 SEO Audit Report - {customer_name}</h1>
-            
-            <div class="score">
-                SEO Score: {score}/100
-            </div>
-            
-            <div class="section">
-                <h2>📋 Website Overview</h2>
-                <p><strong>Website:</strong> {url}</p>
-                <p><strong>Company:</strong> {customer_name}</p>
-                <p><strong>Analysis Date:</strong> {datetime.now().strftime('%B %d, %Y at %I:%M %p')}</p>
-            </div>
-            
-            <div class="section">
-                <h2>📊 Technical Analysis</h2>
-                <table>
-                    <tr><th>Element</th><th>Status</th><th>Details</th></tr>
-                    <tr><td>Title Tag</td><td>{'✅' if 'Missing title' not in str(issues) else '❌'}</td><td>{audit_results.get('title', 'Not checked')}</td></tr>
-                    <tr><td>Meta Description</td><td>{'✅' if 'Missing meta description' not in str(issues) else '❌'}</td><td>{audit_results.get('meta_description', 'Not checked')}</td></tr>
-                    <tr><td>H1 Tag</td><td>{'✅' if headings.get('H1', 0) > 0 else '❌'}</td><td>{headings.get('H1', 0)} found</td></tr>
-                    <tr><td>Images</td><td>{'✅' if images.get('missing_alt', 0) == 0 else '❌'}</td><td>{images.get('total', 0)} images, {images.get('missing_alt', 0)} missing alt text</td></tr>
-                    <tr><td>Internal Links</td><td>✅</td><td>{links.get('internal', 0)} internal links found</td></tr>
-                </table>
-            </div>
-            
-            <div class="section">
-                <h2>⚠️ Issues Found</h2>
-                {(''.join([f'<div class="issue">❌ {issue}</div>' for issue in issues]) if issues else '<p>✅ No major issues found!</p>')}
-            </div>
-            
-            <div class="section">
-                <h2>💡 Recommendations</h2>
-                {''.join([f'<div class="recommendation">💡 {rec}</div>' for rec in recommendations]) if recommendations else '<p>✅ Website looks good!</p>'}
-            </div>
-            
-            <div class="timestamp">
-                📅 Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
-            </div>
-        </div>
-    </body>
-    </html>
+# === Enhanced Styling Function ===
+def apply_enhanced_styling(html_file_path):
     """
+    Apply enhanced styling to the HTML file before PDF conversion
+    """
+    try:
+        print(f"🎨 Applying enhanced styling to {html_file_path}...")
+        
+        # Read the HTML file
+        with open(html_file_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        # Enhanced CSS for beautiful reports
+        enhanced_css = '''<style>
+/* Enhanced SEO Report Styling */
+body { 
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+    margin: 0; 
+    padding: 20px; 
+    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); 
+    color: #333; 
+    line-height: 1.6; 
+}
+
+h1 { 
+    color: white; 
+    font-size: 2.2em; 
+    text-align: center; 
+    margin-bottom: 20px; 
+    padding: 25px 0; 
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+    border-radius: 10px; 
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1); 
+}
+
+h2 { 
+    color: white; 
+    font-size: 1.5em; 
+    margin-top: 30px; 
+    margin-bottom: 15px; 
+    padding: 15px 20px; 
+    background: linear-gradient(90deg, #3498db, #2980b9); 
+    border-radius: 8px; 
+    box-shadow: 0 3px 6px rgba(0,0,0,0.1); 
+    border-left: 5px solid #2980b9; 
+}
+
+h3 { 
+    color: #2980b9; 
+    font-size: 1.2em; 
+    margin-top: 20px; 
+    margin-bottom: 10px; 
+    border-left: 4px solid #3498db; 
+    padding-left: 15px; 
+}
+
+p { 
+    margin: 12px 0; 
+    padding: 15px; 
+    background: white; 
+    border-radius: 6px; 
+    border-left: 4px solid #ecf0f1; 
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05); 
+}
+
+p b { 
+    color: #2c3e50; 
+    font-weight: 600; 
+}
+
+table { 
+    border-collapse: collapse; 
+    margin: 20px 0; 
+    width: 100%; 
+    background: white; 
+    border-radius: 8px; 
+    overflow: hidden; 
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1); 
+}
+
+th { 
+    background: linear-gradient(90deg, #34495e, #2c3e50); 
+    color: white; 
+    padding: 15px 12px; 
+    font-size: 14px; 
+    font-weight: bold; 
+    text-align: left; 
+    text-transform: uppercase; 
+    letter-spacing: 0.5px; 
+}
+
+td { 
+    border: 1px solid #ecf0f1; 
+    padding: 12px 10px; 
+    font-size: 13px; 
+}
+
+tr:nth-child(even) { 
+    background-color: #f8f9fa; 
+}
+
+tr:hover { 
+    background-color: #e3f2fd; 
+}
+
+.redflag { 
+    color: #e74c3c; 
+    font-weight: bold; 
+    background: #fdf2f2; 
+    padding: 8px 12px; 
+    border-radius: 5px; 
+    border-left: 4px solid #e74c3c; 
+    margin: 5px 0; 
+    display: inline-block; 
+}
+
+.redflag:before { 
+    content: '⚠️ '; 
+}
+
+ul { 
+    background: white; 
+    padding: 20px 25px; 
+    border-radius: 8px; 
+    border-left: 4px solid #e74c3c; 
+    margin: 15px 0; 
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05); 
+}
+
+li.redflag { 
+    margin: 10px 0; 
+}
+
+.timestamp { 
+    text-align: center; 
+    color: #7f8c8d; 
+    font-style: italic; 
+    margin-bottom: 30px; 
+    background: white; 
+    padding: 15px; 
+    border-radius: 8px; 
+    border: 2px dashed #bdc3c7; 
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05); 
+}
+
+/* Print optimizations for PDF */
+@media print { 
+    body { background: white !important; } 
+    h1 { background: #2c3e50 !important; color: white !important; } 
+    h2 { background: #3498db !important; color: white !important; } 
+    p, ul { box-shadow: none !important; } 
+}
+</style>'''
+        
+        # Replace the basic CSS with enhanced CSS
+        style_pattern = r'<style>.*?</style>'
+        html_content = re.sub(style_pattern, enhanced_css, html_content, flags=re.DOTALL)
+        
+        # Enhance the title with emoji
+        html_content = html_content.replace(
+            '<h1>SEO Audit Report -',
+            '<h1>🔍 SEO Audit Report -'
+        )
+        
+        # Enhance section headers with emojis
+        html_content = re.sub(
+            r'<h2>([^<]+)</h2>',
+            r'<h2>📊 \\1</h2>',
+            html_content
+        )
+        
+        # Enhance the timestamp
+        html_content = re.sub(
+            r'<div class=["\']timestamp["\']>Generated: ([^<]+)</div>',
+            r'<div class="timestamp">📅 Generated: \\1</div>',
+            html_content
+        )
+        
+        # Write the enhanced HTML back
+        with open(html_file_path, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+        
+        print(f"✅ Enhanced styling applied successfully to {html_file_path}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Failed to apply enhanced styling: {e}")
+        return False
+
+# === Simplified HTML to PDF conversion for serverless ===
+def html_to_pdf_serverless(html_content, customer_name):
+    """
+    Simplified PDF generation for serverless environment
+    Returns HTML content if PDF generation is not available
+    """
+    try:
+        # Try weasyprint (most likely to work in serverless)
+        import weasyprint
+        
+        # Create a temporary file for the PDF
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_pdf:
+            weasyprint.HTML(string=html_content).write_pdf(tmp_pdf.name)
+            return tmp_pdf.name
+            
+    except ImportError:
+        print("⚠️ PDF generation not available in serverless environment")
+        return None
+    except Exception as e:
+        print(f"❌ PDF generation failed: {e}")
+        return None
 
 @app.route("/", methods=["GET"])
 def health_check():
@@ -397,7 +238,7 @@ def health_check():
     return jsonify({
         "status": "healthy",
         "service": "SEO Audit API",
-        "version": "2.0.0",
+        "version": "1.0.0",
         "environment": "vercel",
         "timestamp": datetime.now().isoformat()
     })
@@ -405,72 +246,107 @@ def health_check():
 @app.route("/seo-audit", methods=["POST"])
 def seo_audit():
     """
-    SEO Audit API endpoint - Returns download URL instead of file
+    Serverless SEO Audit API endpoint
+    POST /seo-audit
+    JSON body: { "email": "user@domain.com" }
+    Returns: Generated PDF report or error message
     """
     try:
         data = request.get_json(force=True)
-        email = data.get("email", "")
         
+        email = data.get("email", "")
         if not email or "@" not in email:
             return jsonify({"error": "Valid email is required"}), 400
         
-        # Extract customer info
         customer_name, domain = email.split("@", 1)
         url = f"https://{domain}"
         customer_name = domain.split(".")[0].capitalize()
-        
+
         print(f"🔍 SEO audit request for: {customer_name}, URL: {url}")
         
-        # Run SEO audit
-        auditor = SimpleSeOAuditor(url, customer_name)
-        results = auditor.run_audit()
-        
-        # Generate HTML report (even if results is None)
-        html_report = generate_html_report(customer_name, url, results)
-        
-        if html_report is None:
-            return jsonify({
-                "error": "Failed to generate report",
-                "message": "Could not create the SEO audit report"
-            }), 500
-        
-        # Convert HTML to base64 for easy transfer
-        try:
-            html_base64 = base64.b64encode(html_report.encode('utf-8')).decode('utf-8')
-        except Exception as encode_error:
-            print(f"Encoding error: {encode_error}")
-            return jsonify({
-                "error": "Failed to encode report",
-                "message": "Could not process the SEO audit report"
-            }), 500
-        
-        # Calculate score safely
-        if results and 'issues' in results:
-            score = max(0, 100 - (len(results['issues']) * 15))
-            issues_count = len(results['issues'])
-        else:
-            score = 0
-            issues_count = 0
-        
-        # Return JSON response with download data
-        return jsonify({
-            "success": True,
-            "message": "SEO audit completed successfully",
-            "customer_name": customer_name,
-            "url": url,
-            "score": score,
-            "issues_count": issues_count,
-            "download_data": html_base64,
-            "filename": f"{customer_name}_SEO_Audit_Report.html",
-            "content_type": "text/html"
-        })
-        
+        # Create temporary directory for this request
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                # Run SEO audit (this might fail in serverless environment)
+                run_seo_audit(customer_name, url)
+                
+                # This is a placeholder - in reality, the SEO audit tools
+                # may not work in Vercel's serverless environment
+                return jsonify({
+                    "error": "SEO audit tools not available in serverless environment",
+                    "message": "This application requires local dependencies that are not available on Vercel",
+                    "suggestion": "Consider deploying on a platform that supports full Python environments like Railway, Render, or DigitalOcean"
+                }), 503
+                
+            except Exception as e:
+                # Return a demo report for testing
+                demo_html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>SEO Audit Report - {customer_name}</title>
+                    <style>
+                    body {{ font-family: 'Segoe UI', sans-serif; margin: 20px; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); }}
+                    h1 {{ color: white; text-align: center; padding: 25px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; }}
+                    .error {{ background: #fef2f2; border: 1px solid #e74c3c; padding: 20px; border-radius: 8px; margin: 20px 0; }}
+                    </style>
+                </head>
+                <body>
+                    <h1>🔍 SEO Audit Report - {customer_name}</h1>
+                    <div class="error">
+                        <h2>⚠️ Serverless Environment Limitation</h2>
+                        <p>This SEO audit application requires tools that are not available in Vercel's serverless environment:</p>
+                        <ul>
+                            <li>Scrapy for web crawling</li>
+                            <li>Pandoc for PDF generation</li>
+                            <li>System-level dependencies</li>
+                        </ul>
+                        <p><strong>Recommendation:</strong> Deploy this application on a platform that supports full Python environments.</p>
+                    </div>
+                    <div class="timestamp">📅 Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}</div>
+                </body>
+                </html>
+                """
+                
+                # Save demo HTML to temporary file
+                html_file = os.path.join(temp_dir, f"{customer_name}_demo_report.html")
+                with open(html_file, 'w', encoding='utf-8') as f:
+                    f.write(demo_html)
+                
+                # Apply enhanced styling
+                apply_enhanced_styling(html_file)
+                
+                # Try to generate PDF
+                pdf_path = html_to_pdf_serverless(demo_html, customer_name)
+                
+                if pdf_path and os.path.exists(pdf_path):
+                    return send_file(
+                        pdf_path,
+                        as_attachment=True,
+                        download_name=f"{customer_name}_seo_audit_demo.pdf",
+                        mimetype="application/pdf"
+                    )
+                else:
+                    # Return HTML if PDF generation fails
+                    return send_file(
+                        html_file,
+                        as_attachment=True,
+                        download_name=f"{customer_name}_seo_audit_demo.html",
+                        mimetype="text/html"
+                    )
+
     except Exception as e:
         traceback.print_exc()
         return jsonify({
             "error": str(e),
-            "message": "SEO audit failed"
+            "message": "SEO audit failed",
+            "environment": "vercel_serverless"
         }), 500
+
+# Vercel requires the app to be available at module level
+# def handler(request):
+#     """Vercel handler function"""
+#     return app(request.environ, lambda *args: None)
 
 if __name__ == "__main__":
     app.run(debug=True)
