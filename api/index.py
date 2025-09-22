@@ -187,52 +187,67 @@ class SimpleSeOAuditor:
     
     def run_audit(self):
         """Run the complete SEO audit"""
+        print(f"Starting audit for: {self.url}")
+        
         soup = self.fetch_page()
         if not soup:
+            print("Failed to fetch page")
             return None
         
-        self.results = {
-            'title': self.check_title_tag(soup),
-            'meta_description': self.check_meta_description(soup),
-            'headings': self.check_headings(soup),
-            'images': self.check_images(soup),
-            'links': self.check_internal_links(soup),
-            'page_speed': self.check_page_speed_factors(soup),
-            'issues': self.issues,
-            'recommendations': self.generate_recommendations()
-        }
+        print("Page fetched successfully, analyzing...")
         
-        return self.results
+        try:
+            self.results = {
+                'title': self.check_title_tag(soup),
+                'meta_description': self.check_meta_description(soup),
+                'headings': self.check_headings(soup),
+                'images': self.check_images(soup),
+                'links': self.check_internal_links(soup),
+                'page_speed': self.check_page_speed_factors(soup),
+                'issues': self.issues,
+                'recommendations': self.generate_recommendations()
+            }
+            
+            print(f"Audit completed. Found {len(self.issues)} issues")
+            return self.results
+            
+        except Exception as e:
+            print(f"Error during audit: {str(e)}")
+            return None
 
 def generate_html_report(customer_name, url, audit_results):
     """Generate a beautiful HTML report"""
     
     if not audit_results:
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>SEO Audit Report - {customer_name}</title>
-            <meta charset="utf-8">
-            <style>
-                body {{ font-family: 'Segoe UI', sans-serif; margin: 20px; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); }}
-                .error {{ background: #fef2f2; border: 1px solid #e74c3c; padding: 20px; border-radius: 8px; text-align: center; }}
-            </style>
-        </head>
-        <body>
-            <div class="error">
-                <h1>❌ Audit Failed</h1>
-                <p>Could not analyze the website: {url}</p>
-                <p>Please check if the website is accessible and try again.</p>
-            </div>
-        </body>
-        </html>
-        """
+        return f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>SEO Audit Report - {customer_name}</title>
+    <meta charset="utf-8">
+    <style>
+        body {{ font-family: 'Segoe UI', sans-serif; margin: 20px; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); }}
+        .error {{ background: #fef2f2; border: 1px solid #e74c3c; padding: 20px; border-radius: 8px; text-align: center; }}
+    </style>
+</head>
+<body>
+    <div class="error">
+        <h1>❌ Audit Failed</h1>
+        <p>Could not analyze the website: {url}</p>
+        <p>Please check if the website is accessible and try again.</p>
+    </div>
+</body>
+</html>"""
+    
+    # Safely get values with defaults
+    issues = audit_results.get('issues', [])
+    recommendations = audit_results.get('recommendations', [])
+    headings = audit_results.get('headings', {})
+    images = audit_results.get('images', {})
+    links = audit_results.get('links', {})
     
     # Calculate score
-    total_checks = 6
-    issues_count = len(audit_results['issues'])
-    score = max(0, 100 - (issues_count * 15))  # Deduct 15 points per major issue
+    issues_count = len(issues)
+    score = max(0, 100 - (issues_count * 15))
     
     html_content = f"""
     <!DOCTYPE html>
@@ -350,22 +365,22 @@ def generate_html_report(customer_name, url, audit_results):
                 <h2>📊 Technical Analysis</h2>
                 <table>
                     <tr><th>Element</th><th>Status</th><th>Details</th></tr>
-                    <tr><td>Title Tag</td><td>{'✅' if 'Missing title' not in str(audit_results['issues']) else '❌'}</td><td>{audit_results['title']}</td></tr>
-                    <tr><td>Meta Description</td><td>{'✅' if 'Missing meta description' not in str(audit_results['issues']) else '❌'}</td><td>{audit_results['meta_description']}</td></tr>
-                    <tr><td>H1 Tag</td><td>{'✅' if audit_results['headings']['H1'] > 0 else '❌'}</td><td>{audit_results['headings']['H1']} found</td></tr>
-                    <tr><td>Images</td><td>{'✅' if audit_results['images']['missing_alt'] == 0 else '❌'}</td><td>{audit_results['images']['total']} images, {audit_results['images']['missing_alt']} missing alt text</td></tr>
-                    <tr><td>Internal Links</td><td>✅</td><td>{audit_results['links']['internal']} internal links found</td></tr>
+                    <tr><td>Title Tag</td><td>{'✅' if 'Missing title' not in str(issues) else '❌'}</td><td>{audit_results.get('title', 'Not checked')}</td></tr>
+                    <tr><td>Meta Description</td><td>{'✅' if 'Missing meta description' not in str(issues) else '❌'}</td><td>{audit_results.get('meta_description', 'Not checked')}</td></tr>
+                    <tr><td>H1 Tag</td><td>{'✅' if headings.get('H1', 0) > 0 else '❌'}</td><td>{headings.get('H1', 0)} found</td></tr>
+                    <tr><td>Images</td><td>{'✅' if images.get('missing_alt', 0) == 0 else '❌'}</td><td>{images.get('total', 0)} images, {images.get('missing_alt', 0)} missing alt text</td></tr>
+                    <tr><td>Internal Links</td><td>✅</td><td>{links.get('internal', 0)} internal links found</td></tr>
                 </table>
             </div>
             
             <div class="section">
                 <h2>⚠️ Issues Found</h2>
-                {(''.join([f'<div class="issue">❌ {issue}</div>' for issue in audit_results['issues']]) if audit_results['issues'] else '<p>✅ No major issues found!</p>')}
+                {(''.join([f'<div class="issue">❌ {issue}</div>' for issue in issues]) if issues else '<p>✅ No major issues found!</p>')}
             </div>
             
             <div class="section">
                 <h2>💡 Recommendations</h2>
-                {''.join([f'<div class="recommendation">💡 {rec}</div>' for rec in audit_results['recommendations']])}
+                {''.join([f'<div class="recommendation">💡 {rec}</div>' for rec in recommendations]) if recommendations else '<p>✅ Website looks good!</p>'}
             </div>
             
             <div class="timestamp">
@@ -410,17 +425,32 @@ def seo_audit():
         auditor = SimpleSeOAuditor(url, customer_name)
         results = auditor.run_audit()
         
-        if not results:
-            return jsonify({
-                "error": "Could not analyze website",
-                "message": f"Unable to access {url}. Please check if the website is online and accessible."
-            }), 400
-        
-        # Generate HTML report
+        # Generate HTML report (even if results is None)
         html_report = generate_html_report(customer_name, url, results)
         
+        if html_report is None:
+            return jsonify({
+                "error": "Failed to generate report",
+                "message": "Could not create the SEO audit report"
+            }), 500
+        
         # Convert HTML to base64 for easy transfer
-        html_base64 = base64.b64encode(html_report.encode('utf-8')).decode('utf-8')
+        try:
+            html_base64 = base64.b64encode(html_report.encode('utf-8')).decode('utf-8')
+        except Exception as encode_error:
+            print(f"Encoding error: {encode_error}")
+            return jsonify({
+                "error": "Failed to encode report",
+                "message": "Could not process the SEO audit report"
+            }), 500
+        
+        # Calculate score safely
+        if results and 'issues' in results:
+            score = max(0, 100 - (len(results['issues']) * 15))
+            issues_count = len(results['issues'])
+        else:
+            score = 0
+            issues_count = 0
         
         # Return JSON response with download data
         return jsonify({
@@ -428,8 +458,8 @@ def seo_audit():
             "message": "SEO audit completed successfully",
             "customer_name": customer_name,
             "url": url,
-            "score": max(0, 100 - (len(results['issues']) * 15)),
-            "issues_count": len(results['issues']),
+            "score": score,
+            "issues_count": issues_count,
             "download_data": html_base64,
             "filename": f"{customer_name}_SEO_Audit_Report.html",
             "content_type": "text/html"
