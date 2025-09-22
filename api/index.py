@@ -379,13 +379,13 @@ def generate_html_report(customer_name, url, audit_results):
 @app.route("/", methods=["GET"])
 def health_check():
     """Health check endpoint"""
-    return jsonify({{
+    return jsonify({
         "status": "healthy",
         "service": "SEO Audit API",
         "version": "2.0.0",
         "environment": "vercel",
         "timestamp": datetime.now().isoformat()
-    }})
+    })
 
 @app.route("/seo-audit", methods=["POST"])
 def seo_audit():
@@ -397,24 +397,24 @@ def seo_audit():
         email = data.get("email", "")
         
         if not email or "@" not in email:
-            return jsonify({{"error": "Valid email is required"}}), 400
+            return jsonify({"error": "Valid email is required"}), 400
         
         # Extract customer info
         customer_name, domain = email.split("@", 1)
-        url = f"https://{{domain}}"
+        url = f"https://{domain}"
         customer_name = domain.split(".")[0].capitalize()
         
-        print(f"🔍 SEO audit request for: {{customer_name}}, URL: {{url}}")
+        print(f"🔍 SEO audit request for: {customer_name}, URL: {url}")
         
         # Run SEO audit
         auditor = SimpleSeOAuditor(url, customer_name)
         results = auditor.run_audit()
         
         if not results:
-            return jsonify({{
+            return jsonify({
                 "error": "Could not analyze website",
-                "message": f"Unable to access {{url}}. Please check if the website is online and accessible."
-            }}), 400
+                "message": f"Unable to access {url}. Please check if the website is online and accessible."
+            }), 400
         
         # Generate HTML report
         html_report = generate_html_report(customer_name, url, results)
@@ -423,7 +423,7 @@ def seo_audit():
         html_base64 = base64.b64encode(html_report.encode('utf-8')).decode('utf-8')
         
         # Return JSON response with download data
-        return jsonify({{
+        return jsonify({
             "success": True,
             "message": "SEO audit completed successfully",
             "customer_name": customer_name,
@@ -431,16 +431,16 @@ def seo_audit():
             "score": max(0, 100 - (len(results['issues']) * 15)),
             "issues_count": len(results['issues']),
             "download_data": html_base64,
-            "filename": f"{{customer_name}}_SEO_Audit_Report.html",
+            "filename": f"{customer_name}_SEO_Audit_Report.html",
             "content_type": "text/html"
-        }})
+        })
         
     except Exception as e:
         traceback.print_exc()
-        return jsonify({{
+        return jsonify({
             "error": str(e),
             "message": "SEO audit failed"
-        }}), 500
+        }), 500
 
 if __name__ == "__main__":
     app.run(debug=True)
